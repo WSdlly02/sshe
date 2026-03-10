@@ -1,0 +1,57 @@
+# ===== Default deny =====
+*
+
+# ===== Allow directories (so git can traverse) =====
+!*/
+
+# ===== Allow source code =====
+!**/*.go
+!**/*.rs
+
+# ===== Allow Go / Rust key files =====
+!go.mod
+!go.sum
+!go.work
+!go.work.sum
+!Cargo.toml
+!Cargo.lock
+!rust-toolchain
+!rust-toolchain.toml
+
+# ===== Allow configs / manifests / scripts (按需增删) =====
+!**/*.json
+!**/*.yaml
+!**/*.yml
+!**/*.toml
+!**/*.ini
+!**/*.conf
+!**/*.proto
+!**/*.sql
+!**/*.sh
+!**/*.bash
+!**/*.py
+
+# ===== Allow docs (按需) =====
+!**/*.md
+!LICENSE*
+!.gitignore
+
+# ===== Allow Docker =====
+!Dockerfile*
+!docker-compose*.yml
+
+# ===== Secrets (keep ignored even if pattern above matches) =====
+.env
+.env.*
+!.env.example
+.secret
+*.key
+*.pem
+
+# ===== Build outputs / caches =====
+.direnv/
+target/
+bin/
+dist/
+logs/
+*.log

@@ -1,0 +1,20 @@
+[global]
+ssh_bin = "ssh"
+probe_timeout_ms = 500
+probe_concurrency = 4
+cache_ttl_sec = 300
+cache_path = "~/.cache/sshe/cache.json"
+selection_mode = "lowest_tcp_latency"
+
+[hosts.my-pc]
+user = "wsdlly02"
+port = 22
+identity_file = "~/.ssh/id_ed25519"
+endpoints = ["192.168.31.20", "10.144.144.20", "100.64.0.12", "203.0.113.7"]
+
+[hosts.rpi5]
+user = "wsdlly02"
+port = 2222
+identity_file = "~/.ssh/id_rpi"
+probe_timeout_ms = 800
+endpoints = ["192.168.31.50", "100.64.0.30"]
