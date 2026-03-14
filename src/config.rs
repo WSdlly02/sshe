@@ -1,8 +1,9 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::env;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
 #[derive(Debug, Deserialize)]
 pub struct SsheConfig {
@@ -15,9 +16,7 @@ pub struct GlobalConfig {
     pub ssh_bin: Option<String>,
     pub probe_timeout_ms: Option<u64>,
     pub probe_concurrency: Option<usize>,
-    #[allow(dead_code)]
     pub cache_ttl_sec: Option<u64>,
-    #[allow(dead_code)]
     pub cache_path: Option<String>,
     pub selection_mode: Option<SelectionMode>,
 }
@@ -34,8 +33,16 @@ pub struct HostConfig {
 
 #[derive(Debug, Clone)]
 pub struct FinalConfig {
+    pub host_alias: String,
     pub ssh_bin: String,
     pub host: FinalHostConfig,
+    pub cache: CacheConfig,
+}
+
+#[derive(Debug, Clone)]
+pub struct CacheConfig {
+    pub ttl_sec: u64,
+    pub path: PathBuf,
 }
 
 #[derive(Debug, Clone)]
@@ -44,11 +51,12 @@ pub struct FinalHostConfig {
     pub port: u16,
     pub identity_file: String,
     pub probe_timeout_ms: u64,
+    pub probe_concurrency: usize,
     pub selection_mode: SelectionMode,
     pub endpoints: Vec<String>,
 }
 
-#[derive(Debug, Deserialize, Clone, Copy)]
+#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum SelectionMode {
     LowestIcmpLatency,
@@ -73,10 +81,17 @@ impl SsheConfig {
         let ssh_bin = global
             .and_then(|cfg| cfg.ssh_bin.clone())
             .unwrap_or_else(|| "ssh".to_string());
+        let cache_ttl_sec = global.and_then(|cfg| cfg.cache_ttl_sec).unwrap_or(300);
+        let cache_path = resolve_cache_path(global.and_then(|cfg| cfg.cache_path.as_deref()))?;
 
         Ok(FinalConfig {
+            host_alias: host.to_string(),
             ssh_bin,
             host: merge_host_config(global, host_config)?,
+            cache: CacheConfig {
+                ttl_sec: cache_ttl_sec,
+                path: cache_path,
+            },
         })
     }
 
@@ -93,6 +108,11 @@ impl SsheConfig {
                         return Err("global probe_concurrency must be greater than 0".to_string());
                     }
                 }
+                if let Some(ttl) = global.cache_ttl_sec {
+                    if ttl == 0 {
+                        return Err("global cache_ttl_sec must be greater than 0".to_string());
+                    }
+                }
             }
             None => {}
         }
@@ -106,7 +126,7 @@ impl SsheConfig {
                         return Err(format!("host '{}' has empty user", name));
                     }
                     match host.port {
-                        1..65534 => {}
+                        1..=65535 => {}
                         _ => return Err(format!("host '{}' has invalid port {}", name, host.port)),
                     }
                     if host.identity_file.trim().is_empty() {
@@ -140,6 +160,7 @@ pub fn merge_host_config(
         user: host.user.clone(),
         port: host.port,
         identity_file,
+        probe_concurrency: global.and_then(|cfg| cfg.probe_concurrency).unwrap_or(4),
         probe_timeout_ms: host
             .probe_timeout_ms
             .or(global.and_then(|cfg| cfg.probe_timeout_ms))
@@ -150,6 +171,26 @@ pub fn merge_host_config(
             .unwrap_or(SelectionMode::LowestTcpLatency),
         endpoints: host.endpoints.clone(),
     })
+}
+
+fn resolve_cache_path(path: Option<&str>) -> Result<PathBuf, String> {
+    match path {
+        Some(path) => Ok(PathBuf::from(expand_tilde(path)?)),
+        None => default_cache_path(),
+    }
+}
+
+fn default_cache_path() -> Result<PathBuf, String> {
+    let output = Command::new("id")
+        .arg("-u")
+        .output()
+        .map_err(|e| format!("failed to execute 'id -u' to get current user ID: {}", e))?;
+    let uid = String::from_utf8(output.stdout)
+        .map_err(|_| "failed to parse user ID".to_string())?
+        .trim()
+        .to_string();
+
+    Ok(PathBuf::from(format!("/run/user/{uid}/sshe/cache.toml")))
 }
 
 fn expand_tilde(path: &str) -> Result<String, String> {
@@ -168,7 +209,7 @@ fn expand_tilde(path: &str) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{HostConfig, SelectionMode, merge_host_config};
+    use super::{HostConfig, SelectionMode, default_cache_path, merge_host_config};
 
     #[test]
     fn merge_uses_defaults_without_global() {
@@ -184,9 +225,17 @@ mod tests {
         let merged = merge_host_config(None, &host).expect("merge should succeed");
 
         assert_eq!(merged.probe_timeout_ms, 500);
+        assert_eq!(merged.probe_concurrency, 4);
         assert!(matches!(
             merged.selection_mode,
             SelectionMode::LowestTcpLatency
         ));
+    }
+
+    #[test]
+    fn default_cache_path_uses_run_user_uid() {
+        let path = default_cache_path().expect("path should resolve");
+        assert!(path.to_string_lossy().contains("/run/user/"));
+        assert!(path.to_string_lossy().ends_with("/sshe/cache.toml"));
     }
 }

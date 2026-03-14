@@ -1,71 +1,108 @@
 use crate::config::{FinalHostConfig, SelectionMode};
-use std::net::{TcpStream, ToSocketAddrs};
-use std::process::Command;
+use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tokio::net::{TcpStream, lookup_host};
+use tokio::process::Command;
+use tokio::sync::Semaphore;
+use tokio::time;
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProbeSource {
+    Cache,
+    Probe,
+}
+
+#[derive(Debug, Clone)]
 pub struct ProbeResult {
     pub endpoint: String,
     pub latency_ms: u128,
+    pub source: ProbeSource,
 }
 
-pub fn select_best_endpoint(host: &FinalHostConfig) -> Result<ProbeResult, String> {
-    let port = host.port;
+pub async fn select_best_endpoint(host: &FinalHostConfig) -> Result<ProbeResult, String> {
     let timeout = Duration::from_millis(host.probe_timeout_ms);
+    let semaphore = Arc::new(Semaphore::new(host.probe_concurrency.max(1)));
+    let mut tasks = Vec::with_capacity(host.endpoints.len());
+
+    for endpoint in host.endpoints.iter().cloned() {
+        let semaphore = Arc::clone(&semaphore);
+        let selection_mode = host.selection_mode;
+        let port = host.port;
+
+        tasks.push(tokio::spawn(async move {
+            let _permit = semaphore
+                .acquire_owned()
+                .await
+                .map_err(|_| format!("{endpoint}:{port} -> semaphore closed"))?;
+
+            let latency_ms = match selection_mode {
+                SelectionMode::LowestTcpLatency => probe_tcp(&endpoint, port, timeout).await,
+                SelectionMode::LowestIcmpLatency => probe_icmp(&endpoint, timeout).await,
+            }
+            .map_err(|err| format!("{endpoint}:{port} -> {err}"))?;
+
+            Ok::<ProbeResult, String>(ProbeResult {
+                endpoint,
+                latency_ms,
+                source: ProbeSource::Probe,
+            })
+        }));
+    }
 
     let mut best: Option<ProbeResult> = None;
-    let mut last_err: Option<String> = None;
+    let mut errors = Vec::new();
 
-    for endpoint in &host.endpoints {
-        let probe = match host.selection_mode {
-            SelectionMode::LowestTcpLatency => probe_tcp(endpoint, port, timeout),
-            SelectionMode::LowestIcmpLatency => probe_icmp(endpoint, timeout),
-        };
-
-        match probe {
-            Ok(latency_ms) => {
-                let current = ProbeResult {
-                    endpoint: endpoint.clone(),
-                    latency_ms,
-                };
-
-                match &best {
-                    Some(prev) if prev.latency_ms <= current.latency_ms => {}
-                    _ => best = Some(current),
-                }
-            }
-            Err(err) => {
-                last_err = Some(format!("{endpoint}:{port} -> {err}"));
-            }
+    for task in tasks {
+        match task.await {
+            Ok(Ok(result)) => match &best {
+                Some(current) if current.latency_ms <= result.latency_ms => {}
+                _ => best = Some(result),
+            },
+            Ok(Err(err)) => errors.push(err),
+            Err(err) => errors.push(format!("probe task failed: {err}")),
         }
     }
 
-    best.ok_or_else(|| last_err.unwrap_or_else(|| "no reachable endpoint found".to_string()))
+    best.ok_or_else(|| {
+        if errors.is_empty() {
+            "no reachable endpoint found".to_string()
+        } else {
+            errors.join("; ")
+        }
+    })
 }
 
-fn probe_tcp(host: &str, port: u16, timeout: Duration) -> Result<u128, String> {
-    let addr_text = format!("{host}:{port}");
-    let mut addrs = addr_text
-        .to_socket_addrs()
-        .map_err(|e| format!("resolve failed: {e}"))?;
-
-    let addr = addrs
-        .next()
-        .ok_or_else(|| "no socket address resolved".to_string())?;
-
+async fn probe_tcp(host: &str, port: u16, timeout: Duration) -> Result<u128, String> {
+    let addr = resolve_socket_addr(host, port).await?;
     let start = Instant::now();
-    TcpStream::connect_timeout(&addr, timeout).map_err(|e| format!("connect failed: {e}"))?;
-    let elapsed = start.elapsed().as_millis();
 
-    Ok(elapsed)
+    time::timeout(timeout, TcpStream::connect(addr))
+        .await
+        .map_err(|_| "connect timeout".to_string())?
+        .map_err(|err| format!("connect failed: {err}"))?;
+
+    Ok(start.elapsed().as_millis())
 }
 
-fn probe_icmp(host: &str, timeout: Duration) -> Result<u128, String> {
+async fn resolve_socket_addr(host: &str, port: u16) -> Result<SocketAddr, String> {
+    let addr_text = format!("{host}:{port}");
+    let mut addrs = lookup_host(&addr_text)
+        .await
+        .map_err(|err| format!("resolve failed: {err}"))?;
+
+    addrs
+        .next()
+        .ok_or_else(|| "no socket address resolved".to_string())
+}
+
+async fn probe_icmp(host: &str, timeout: Duration) -> Result<u128, String> {
     let timeout_sec = timeout.as_secs().max(1);
     let output = Command::new("ping")
         .args(["-c", "1", "-W", &timeout_sec.to_string(), host])
         .output()
-        .map_err(|e| format!("failed to execute ping: {e}"))?;
+        .await
+        .map_err(|err| format!("failed to execute ping: {err}"))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);

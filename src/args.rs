@@ -15,6 +15,10 @@ pub struct Args {
     #[arg(short = 'c', long = "config-file", value_name = "PATH")]
     pub config_file: Option<PathBuf>,
 
+    /// 忽略缓存并强制重新测速
+    #[arg(long = "refresh-cache")]
+    pub refresh_cache: bool,
+
     /// 输出更详细的日志
     #[arg(short = 'v', long = "verbose")]
     pub verbose: bool,
@@ -46,22 +50,24 @@ impl Args {
                     "HOME is not set, cannot determine default config path".to_string()
                 })?;
 
-                let default_path_1 = PathBuf::from(&home).join(".ssh/sshe.toml");
-                let default_path_2 = PathBuf::from(&home).join(".config/sshe.toml");
-                let default_path_3 = PathBuf::from(&home).join(".config/sshe/config.toml");
+                let default_paths = [
+                    PathBuf::from(&home).join(".ssh/sshe.toml"),
+                    PathBuf::from(&home).join(".config/sshe.toml"),
+                    PathBuf::from(&home).join(".config/sshe/config.toml"),
+                ];
 
-                if default_path_1.is_file() {
-                    Ok(default_path_1)
-                } else if default_path_2.is_file() {
-                    Ok(default_path_2)
-                } else if default_path_3.is_file() {
-                    Ok(default_path_3)
+                if let Some(default_path) = default_paths.clone().into_iter().find(|p| p.is_file())
+                {
+                    Ok(default_path)
                 } else {
                     Err(format!(
-                        "default config file does not exist: {} {} {}",
-                        default_path_1.display(),
-                        default_path_2.display(),
-                        default_path_3.display()
+                        "default config file does not exist: {}",
+                        default_paths
+                            .iter()
+                            .map(|p| p.to_str())
+                            .flatten()
+                            .collect::<Vec<_>>()
+                            .join(", ")
                     ))
                 }
             }
