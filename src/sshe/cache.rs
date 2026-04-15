@@ -1,5 +1,5 @@
-use crate::config::{CacheConfig, FinalHostConfig, SelectionMode};
-use crate::selector::{ProbeResult, ProbeSource};
+use crate::sshe::config::{CacheConfig, FinalHostConfig, SelectionMode};
+use crate::sshe::selector::{ProbeResult, ProbeSource};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs;

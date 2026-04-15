@@ -1,18 +1,10 @@
-mod args;
-mod cache;
-mod config;
-mod selector;
-
-use args::Args;
-use cache::{load_cached_result, store_cached_result};
 use clap::Parser;
-use config::{SsheConfig, read_config_file};
-use selector::{ProbeSource, select_best_endpoint};
+use sshe::sshe;
 use std::process::{Command, ExitCode};
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    let args = Args::parse();
+    let args = sshe::args::Args::parse();
 
     let config_path = match args.resolve_config_path() {
         Ok(path) => path,
@@ -22,7 +14,7 @@ async fn main() -> ExitCode {
         }
     };
 
-    let config: SsheConfig = match read_config_file(&config_path) {
+    let config: sshe::config::SsheConfig = match sshe::config::read_config_file(&config_path) {
         Ok(cfg) => cfg,
         Err(err) => {
             eprintln!("Error: {err}");
@@ -43,7 +35,7 @@ async fn main() -> ExitCode {
     };
 
     let best = if args.refresh_cache {
-        let probed = match select_best_endpoint(&final_config.host).await {
+        let probed = match sshe::selector::select_best_endpoint(&final_config.host).await {
             Ok(result) => result,
             Err(err) => {
                 eprintln!("Error: failed to select endpoint: {err}");
@@ -51,7 +43,7 @@ async fn main() -> ExitCode {
             }
         };
 
-        if let Err(err) = store_cached_result(
+        if let Err(err) = sshe::cache::store_cached_result(
             &final_config.cache,
             &final_config.host_alias,
             &final_config.host,
@@ -62,14 +54,14 @@ async fn main() -> ExitCode {
 
         probed
     } else {
-        match load_cached_result(
+        match sshe::cache::load_cached_result(
             &final_config.cache,
             &final_config.host_alias,
             &final_config.host,
         ) {
             Ok(Some(result)) => result,
             Ok(None) => {
-                let probed = match select_best_endpoint(&final_config.host).await {
+                let probed = match sshe::selector::select_best_endpoint(&final_config.host).await {
                     Ok(result) => result,
                     Err(err) => {
                         eprintln!("Error: failed to select endpoint: {err}");
@@ -77,7 +69,7 @@ async fn main() -> ExitCode {
                     }
                 };
 
-                if let Err(err) = store_cached_result(
+                if let Err(err) = sshe::cache::store_cached_result(
                     &final_config.cache,
                     &final_config.host_alias,
                     &final_config.host,
@@ -90,7 +82,7 @@ async fn main() -> ExitCode {
             }
             Err(err) => {
                 eprintln!("Warning: failed to read cache: {err}");
-                let probed = match select_best_endpoint(&final_config.host).await {
+                let probed = match sshe::selector::select_best_endpoint(&final_config.host).await {
                     Ok(result) => result,
                     Err(probe_err) => {
                         eprintln!("Error: failed to select endpoint: {probe_err}");
@@ -98,7 +90,7 @@ async fn main() -> ExitCode {
                     }
                 };
 
-                if let Err(store_err) = store_cached_result(
+                if let Err(store_err) = sshe::cache::store_cached_result(
                     &final_config.cache,
                     &final_config.host_alias,
                     &final_config.host,
@@ -114,8 +106,8 @@ async fn main() -> ExitCode {
 
     if args.verbose {
         let source = match best.source {
-            ProbeSource::Cache => "cache",
-            ProbeSource::Probe => "probe",
+            sshe::selector::ProbeSource::Cache => "cache",
+            sshe::selector::ProbeSource::Probe => "probe",
         };
         eprintln!("Using config: {}", config_path.display());
         if args.refresh_cache {

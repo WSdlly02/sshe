@@ -51,7 +51,6 @@
 # ===== Build outputs / caches =====
 .direnv/
 target/
-bin/
 dist/
 logs/
 *.log

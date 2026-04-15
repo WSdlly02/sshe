@@ -46,27 +46,30 @@ impl Args {
                 }
             }
             None => {
-                let home = env::var_os("HOME").ok_or_else(|| {
-                    "HOME is not set, cannot determine default config path".to_string()
-                })?;
+                let home = match env::var("HOME") {
+                    Ok(path) => PathBuf::from(path),
+                    Err(_) => {
+                        return Err(
+                            "HOME is not set, cannot determine default config path".to_string()
+                        );
+                    }
+                };
 
                 let default_paths = [
-                    PathBuf::from(&home).join(".ssh/sshe.toml"),
-                    PathBuf::from(&home).join(".config/sshe.toml"),
-                    PathBuf::from(&home).join(".config/sshe/config.toml"),
+                    home.join(".ssh/sshe.toml"),
+                    home.join(".config/sshe.toml"),
+                    home.join(".config/sshe/config.toml"),
                 ];
 
-                if let Some(default_path) = default_paths.clone().into_iter().find(|p| p.is_file())
-                {
-                    Ok(default_path)
+                if let Some(default_path) = default_paths.iter().find(|p| p.is_file()) {
+                    Ok(default_path.clone())
                 } else {
                     Err(format!(
                         "default config file does not exist: {}",
                         default_paths
                             .iter()
-                            .map(|p| p.to_str())
-                            .flatten()
-                            .collect::<Vec<_>>()
+                            .filter_map(|p| p.to_str())
+                            .collect::<Vec<&str>>()
                             .join(", ")
                     ))
                 }

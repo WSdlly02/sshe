@@ -1,4 +1,4 @@
-use crate::config::{FinalHostConfig, SelectionMode};
+use crate::sshe::config::{FinalHostConfig, SelectionMode};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
