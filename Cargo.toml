@@ -3,25 +3,43 @@ name = "sshe"
 version = "1.0.0"
 edition = "2024"
 
+# sshe 包含三个二进制目标：ssher、sshea 和 sshed
+# ssher 用于解析用户输入的主机名并查找对应的配置，选择最快的 IP
+# sshea 用于 AI AGENT 的 ssh 客户端
+# sshed 用于 AI AGENT 的 ssh 服务端
 [[bin]]
-name = "sshe"
-path = "src/bin/sshe.rs"
+name = "ssher"
+path = "src/bin/ssher.rs"
+
+[[bin]]
+name = "sshea"
+path = "src/bin/sshea.rs"
 
 [[bin]]
 name = "sshed"
 path = "src/bin/sshed.rs"
 
-
 [dependencies]
+anyhow = "1.0"
 clap = { version = "4.6.0", features = ["derive"] }
-mimalloc = "0.1"
+futures = "0.3"
 serde = { version = "1.0.228", features = ["derive"] }
 tokio = { version = "1.52.0", features = [
+  "io-std",
+  "io-util",
   "macros",
   "net",
   "process",
   "rt-multi-thread",
+  "signal",
   "sync",
   "time",
 ] }
 toml = "1.1.2"
+
+[profile.release]
+opt-level = 3
+lto = "fat"       # 跨 crate 链接时全局优化，性能提升 10-30%
+codegen-units = 1 # 禁止并行编译，允许更激进的内联优化
+strip = true      # 去除符号表，减小体积
+panic = "abort"   # 减小体积并略微提升性能

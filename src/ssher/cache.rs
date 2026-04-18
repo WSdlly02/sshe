@@ -1,5 +1,6 @@
-use crate::sshe::config::{CacheConfig, FinalHostConfig, SelectionMode};
-use crate::sshe::selector::{ProbeResult, ProbeSource};
+use crate::ssher::config::{CacheConfig, FinalHostConfig, SelectionMode};
+use crate::ssher::selector::{ProbeResult, ProbeSource};
+use anyhow::{Context, Result, anyhow};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs;
@@ -24,7 +25,8 @@ pub fn load_cached_result(
     cache: &CacheConfig,
     host_alias: &str,
     host: &FinalHostConfig,
-) -> Result<Option<ProbeResult>, String> {
+    port: u16,
+) -> Result<Option<ProbeResult>> {
     let cache_file = read_cache_file(&cache.path)?;
     let now = current_unix_ts()?;
 
@@ -36,7 +38,7 @@ pub fn load_cached_result(
         return Ok(None);
     }
 
-    if entry.port != host.port || entry.selection_mode != host.selection_mode {
+    if entry.port != port || entry.selection_mode != host.selection_mode {
         return Ok(None);
     }
 
@@ -59,8 +61,9 @@ pub fn store_cached_result(
     cache: &CacheConfig,
     host_alias: &str,
     host: &FinalHostConfig,
+    port: u16,
     result: &ProbeResult,
-) -> Result<(), String> {
+) -> Result<()> {
     let mut cache_file = read_cache_file(&cache.path)?;
     let now = current_unix_ts()?;
 
@@ -70,7 +73,7 @@ pub fn store_cached_result(
             endpoint: result.endpoint.clone(),
             latency_ms: result.latency_ms.min(u64::MAX as u128) as u64,
             expires_at_unix: now.saturating_add(cache.ttl_sec),
-            port: host.port,
+            port,
             selection_mode: host.selection_mode,
         },
     );
@@ -78,38 +81,35 @@ pub fn store_cached_result(
     write_cache_file(&cache.path, &cache_file)
 }
 
-fn read_cache_file(path: &Path) -> Result<CacheFile, String> {
+fn read_cache_file(path: &Path) -> Result<CacheFile> {
     match fs::read_to_string(path) {
         Ok(content) => toml::from_str(&content)
-            .map_err(|err| format!("failed to parse cache file {}: {err}", path.display())),
+            .with_context(|| format!("failed to parse cache file {}", path.display())),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(CacheFile::default()),
-        Err(err) => Err(format!(
-            "failed to read cache file {}: {err}",
-            path.display()
+        Err(err) => Err(anyhow!(
+            "failed to read cache file {}: {}",
+            path.display(),
+            err
         )),
     }
 }
 
-fn write_cache_file(path: &Path, cache: &CacheFile) -> Result<(), String> {
+fn write_cache_file(path: &Path, cache: &CacheFile) -> Result<()> {
     let parent = path
         .parent()
-        .ok_or_else(|| format!("cache path has no parent: {}", path.display()))?;
-    fs::create_dir_all(parent).map_err(|err| {
-        format!(
-            "failed to create cache directory {}: {err}",
-            parent.display()
-        )
-    })?;
+        .ok_or_else(|| anyhow!("cache path has no parent: {}", path.display()))?;
+    fs::create_dir_all(parent)
+        .with_context(|| format!("failed to create cache directory {}", parent.display()))?;
 
     let content = toml::to_string(cache)
-        .map_err(|err| format!("failed to serialize cache file {}: {err}", path.display()))?;
+        .with_context(|| format!("failed to serialize cache file {}", path.display()))?;
     fs::write(path, content)
-        .map_err(|err| format!("failed to write cache file {}: {err}", path.display()))
+        .with_context(|| format!("failed to write cache file {}", path.display()))
 }
 
-fn current_unix_ts() -> Result<u64, String> {
+fn current_unix_ts() -> Result<u64> {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs())
-        .map_err(|err| format!("system clock error: {err}"))
+        .map_err(|err| anyhow!("system clock error: {}", err))
 }

@@ -1,13 +1,13 @@
+use anyhow::{Result, bail};
 use clap::Parser;
 use std::env;
 use std::path::PathBuf;
 
-/// sshe: 智能选择 SSH 目标地址的包装器
+/// ssher: 供 OpenSSH ProxyCommand 调用的地址选择器
 #[derive(Debug, Parser)]
 #[command(
-    name = "sshe",
     version,
-    about = "A modern wrapper of ssh/sshd",
+    about = "Resolve the best endpoint and proxy TCP stdio for OpenSSH",
     long_about = None
 )]
 pub struct Args {
@@ -23,55 +23,51 @@ pub struct Args {
     #[arg(short = 'v', long = "verbose")]
     pub verbose: bool,
 
-    /// 逻辑主机名
-    #[arg(value_name = "HOST_NAME")]
-    pub host_name: String,
+    /// 逻辑主机名，建议在 ssh_config 中传入 %n
+    #[arg(long = "host", value_name = "HOST", required = true)]
+    pub host: String,
 
-    /// 传递给 ssh 的参数
-    #[arg(value_name = "SSH_ARGS", trailing_var_arg = true)]
-    pub ssh_args: Vec<String>,
+    /// ssh_config 中传入的 %p
+    #[arg(long = "port", value_name = "PORT", required = true)]
+    pub port: u16,
 }
 
 impl Args {
-    pub fn resolve_config_path(&self) -> Result<PathBuf, String> {
+    pub fn resolve_config_path(&self) -> Result<PathBuf> {
         match self.config_file.as_ref() {
             Some(path) => {
                 if path.is_file() {
-                    return Ok(path.clone());
+                    Ok(path.clone())
                 } else {
-                    return Err(format!(
+                    bail!(
                         "config file does not exist or is not a regular file: {}",
                         path.display()
-                    ));
+                    )
                 }
             }
             None => {
                 let home = match env::var("HOME") {
                     Ok(path) => PathBuf::from(path),
-                    Err(_) => {
-                        return Err(
-                            "HOME is not set, cannot determine default config path".to_string()
-                        );
-                    }
+                    Err(_) => bail!("HOME is not set, cannot determine default config path"),
                 };
 
                 let default_paths = [
-                    home.join(".ssh/sshe.toml"),
-                    home.join(".config/sshe.toml"),
-                    home.join(".config/sshe/sshe_config.toml"),
+                    home.join(".ssh/ssher.toml"),
+                    home.join(".config/ssher.toml"),
+                    home.join(".config/sshe/ssher_config.toml"),
                 ];
 
                 if let Some(default_path) = default_paths.iter().find(|p| p.is_file()) {
                     Ok(default_path.clone())
                 } else {
-                    Err(format!(
+                    bail!(
                         "default config file does not exist: {}",
                         default_paths
                             .iter()
                             .filter_map(|p| p.to_str())
                             .collect::<Vec<&str>>()
                             .join(", ")
-                    ))
+                    )
                 }
             }
         }
