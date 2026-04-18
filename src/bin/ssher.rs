@@ -135,33 +135,24 @@ async fn proxy_tcp_stdio(endpoint: &str, port: u16, timeout_ms: u64) -> Result<(
     let mut stdin = io::stdin();
     let mut stdout = io::stdout();
 
-    let proxy_handle = tokio::spawn(async move {
-        let stdin_to_socket = async {
-            io::copy(&mut stdin, &mut writer)
-                .await
-                .context("stdin->socket copy failed")?;
-            writer.shutdown().await.context("socket shutdown failed")?;
-            Ok::<(), anyhow::Error>(())
-        };
-
-        let socket_to_stdout = async {
-            io::copy(&mut reader, &mut stdout)
-                .await
-                .context("socket->stdout copy failed")?;
-            stdout.flush().await.context("stdout flush failed")?;
-            Ok::<(), anyhow::Error>(())
-        };
-        let (left, right) = tokio::join!(stdin_to_socket, socket_to_stdout);
-        left?;
-        right?;
+    let stdin_to_socket = async {
+        io::copy(&mut stdin, &mut writer)
+            .await
+            .context("stdin->socket copy failed")?;
+        writer.shutdown().await.context("socket shutdown failed")?;
         Ok::<(), anyhow::Error>(())
-    });
+    };
 
-    tokio::select! {
-        res = proxy_handle => res??,   // 注意两个 ?? 解包 JoinError 和业务 Error
-        _ = tokio::signal::ctrl_c() => {
-            println!("shutdown signal received");
-        }
-    }
+    let socket_to_stdout = async {
+        io::copy(&mut reader, &mut stdout)
+            .await
+            .context("socket->stdout copy failed")?;
+        stdout.flush().await.context("stdout flush failed")?;
+        Ok::<(), anyhow::Error>(())
+    };
+
+    let (left, right) = tokio::join!(stdin_to_socket, socket_to_stdout);
+    left?;
+    right?;
     Ok(())
 }

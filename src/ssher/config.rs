@@ -174,7 +174,14 @@ fn expand_tilde(path: &str) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{HostConfig, SelectionMode, default_cache_path, merge_host_config};
+    use super::{
+        GlobalConfig, HostConfig, SelectionMode, SsherConfig, default_cache_path,
+        merge_host_config, read_config_file,
+    };
+    use std::collections::BTreeMap;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn merge_uses_defaults_without_global() {
@@ -198,5 +205,108 @@ mod tests {
         let path = default_cache_path().expect("path should resolve");
         assert!(path.to_string_lossy().contains("/run/user/"));
         assert!(path.to_string_lossy().ends_with("/sshe/ssher_cache.toml"));
+    }
+
+    #[test]
+    fn read_config_file_fails_for_invalid_toml() {
+        let path = temp_test_path("invalid-config", "toml");
+        fs::write(&path, "this is not valid toml = [").expect("failed to write test config");
+
+        let err = read_config_file(&path).expect_err("invalid TOML should fail");
+        assert!(err.to_string().contains("failed to parse TOML config"));
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn validate_rejects_zero_global_cache_ttl() {
+        let config = SsherConfig {
+            global: Some(GlobalConfig {
+                probe_timeout_ms: None,
+                cache_ttl_sec: Some(0),
+                cache_path: None,
+                selection_mode: None,
+            }),
+            hosts: hosts_with_single_endpoint(),
+        };
+
+        let err = config
+            .validate()
+            .expect_err("zero cache_ttl_sec should fail");
+        assert!(
+            err.to_string()
+                .contains("global cache_ttl_sec must be greater than 0")
+        );
+    }
+
+    #[test]
+    fn validate_rejects_zero_host_probe_timeout() {
+        let mut hosts = BTreeMap::new();
+        hosts.insert(
+            "my-pc".to_string(),
+            HostConfig {
+                probe_timeout_ms: Some(0),
+                selection_mode: None,
+                endpoints: vec!["127.0.0.1".to_string()],
+            },
+        );
+
+        let config = SsherConfig {
+            global: None,
+            hosts,
+        };
+
+        let err = config
+            .validate()
+            .expect_err("zero host probe_timeout_ms should fail");
+        assert!(
+            err.to_string()
+                .contains("host 'my-pc' probe_timeout_ms must be greater than 0")
+        );
+    }
+
+    #[test]
+    fn validate_rejects_empty_endpoints() {
+        let mut hosts = BTreeMap::new();
+        hosts.insert(
+            "my-pc".to_string(),
+            HostConfig {
+                probe_timeout_ms: None,
+                selection_mode: None,
+                endpoints: Vec::new(),
+            },
+        );
+
+        let config = SsherConfig {
+            global: None,
+            hosts,
+        };
+
+        let err = config.validate().expect_err("empty endpoints should fail");
+        assert!(
+            err.to_string()
+                .contains("host 'my-pc' must have at least one endpoint")
+        );
+    }
+
+    fn temp_test_path(prefix: &str, ext: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be monotonic enough for tests")
+            .as_nanos();
+        std::env::temp_dir().join(format!("ssher-{prefix}-{nanos}.{ext}"))
+    }
+
+    fn hosts_with_single_endpoint() -> BTreeMap<String, HostConfig> {
+        let mut hosts = BTreeMap::new();
+        hosts.insert(
+            "my-pc".to_string(),
+            HostConfig {
+                probe_timeout_ms: None,
+                selection_mode: None,
+                endpoints: vec!["127.0.0.1".to_string()],
+            },
+        );
+        hosts
     }
 }

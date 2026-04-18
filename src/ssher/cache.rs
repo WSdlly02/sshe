@@ -113,3 +113,65 @@ fn current_unix_ts() -> Result<u64> {
         .map(|duration| duration.as_secs())
         .map_err(|err| anyhow!("system clock error: {}", err))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::load_cached_result;
+    use crate::ssher::config::{CacheConfig, FinalHostConfig, SelectionMode};
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn load_cached_result_fails_for_invalid_toml() {
+        let path = temp_test_path("invalid-cache", "toml");
+        fs::write(&path, "entries = [broken").expect("failed to write invalid cache file");
+
+        let err = load_cached_result(
+            &CacheConfig {
+                ttl_sec: 300,
+                path: path.clone(),
+            },
+            "my-pc",
+            &test_host(),
+            22,
+        )
+        .expect_err("invalid cache TOML should fail");
+
+        assert!(err.to_string().contains("failed to parse cache file"));
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn load_cached_result_returns_none_when_cache_file_missing() {
+        let path = temp_test_path("missing-cache", "toml");
+        let _ = fs::remove_file(&path);
+
+        let result = load_cached_result(
+            &CacheConfig { ttl_sec: 300, path },
+            "my-pc",
+            &test_host(),
+            22,
+        )
+        .expect("missing cache file should be treated as empty cache");
+
+        assert!(result.is_none());
+    }
+
+    fn test_host() -> FinalHostConfig {
+        FinalHostConfig {
+            probe_timeout_ms: 500,
+            selection_mode: SelectionMode::LowestTcpLatency,
+            endpoints: vec!["127.0.0.1".to_string()],
+        }
+    }
+
+    fn temp_test_path(prefix: &str, ext: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be monotonic enough for tests")
+            .as_nanos();
+        std::env::temp_dir().join(format!("ssher-{prefix}-{nanos}.{ext}"))
+    }
+}
