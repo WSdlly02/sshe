@@ -3,19 +3,23 @@ use clap::Parser;
 use std::env;
 use std::path::PathBuf;
 
-/// sshe: 智能选择 SSH 目标地址的包装器
+/// sshea: client for AI-agent-oriented sshed
 #[derive(Debug, Parser)]
-#[command(
-    version,
-    about = "sshe's daemon mode for ssh command execution",
-    long_about = None
-)]
+#[command(version, about = "Connect to sshed and negotiate capabilities", long_about = None)]
 pub struct Args {
-    /// 配置文件路径
+    /// Config file path
     #[arg(short = 'c', long = "config-file", value_name = "PATH")]
     pub config_file: Option<PathBuf>,
 
-    /// 输出更详细的日志
+    /// Override server address
+    #[arg(long = "server-addr", value_name = "ADDR")]
+    pub server_addr: Option<String>,
+
+    /// Override token file path
+    #[arg(long = "token-file", value_name = "PATH")]
+    pub token_file: Option<PathBuf>,
+
+    /// Output more diagnostics
     #[arg(short = 'v', long = "verbose")]
     pub verbose: bool,
 }
@@ -40,9 +44,9 @@ impl Args {
                 };
 
                 let default_paths = [
-                    home.join(".ssh/sshed.toml"),
-                    home.join(".config/sshed.toml"),
-                    home.join(".config/sshe/sshed_config.toml"),
+                    home.join(".ssh/sshea.toml"),
+                    home.join(".config/sshea.toml"),
+                    home.join(".config/sshe/sshea_config.toml"),
                 ];
 
                 if let Some(default_path) = default_paths.iter().find(|p| p.is_file()) {

@@ -81,4 +81,35 @@ cargo run --bin ssher -- --host my-pc --port 22 --refresh-cache -v
 
 - 当前版本只支持 Linux
 - `lowest_icmp_latency` 依赖 Linux 风格的 `ping -c 1 -W <sec>`
-- `sshea` 和 `sshed` 目前仍是占位入口
+- `sshea` 和 `sshed` 目前实现了 hello/token/capabilities 握手，命令执行协议后续实现
+
+## sshea / sshed
+
+`sshea` 和 `sshed` 是面向 AI agent 的独立通道，不复用 OpenSSH 协议。当前第一版只实现握手：
+
+- 客户端第一帧发送 `hello`，包含协议版本、客户端名称和 token
+- 服务端校验 token
+- 服务端返回 capabilities
+
+协议封包使用 `u32_be length + JSON payload`。
+
+服务端示例配置见 [example/sshed.toml](/home/wsdlly02/Documents/sshe/example/sshed.toml)。默认配置路径：
+
+- `~/.ssh/sshed.toml`
+- `~/.config/sshed.toml`
+- `~/.config/sshe/sshed_config.toml`
+
+客户端示例配置见 [example/sshea.toml](/home/wsdlly02/Documents/sshe/example/sshea.toml)。默认配置路径：
+
+- `~/.ssh/sshea.toml`
+- `~/.config/sshea.toml`
+- `~/.config/sshe/sshea_config.toml`
+
+最小调试流程：
+
+```bash
+mkdir -p ~/.config/sshe
+printf 'dev-token\n' > ~/.config/sshe/sshed.token
+cargo run --bin sshed -- -c ./example/sshed.toml -v
+cargo run --bin sshea -- -c ./example/sshea.toml -v
+```
