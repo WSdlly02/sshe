@@ -1,0 +1,16 @@
+[package]
+name = "sshe-node"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+futures.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+toml.workspace = true
+iroh.workspace = true
+sshe-core.workspace = true
+sshe-protocol.workspace = true
+tempfile.workspace = true

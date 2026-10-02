@@ -1,0 +1,17 @@
+[package]
+name = "sshe-cli"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+tokio.workspace = true
+serde_json.workspace = true
+sshe-node.workspace = true
+sshe-core.workspace = true
+sshe-protocol.workspace = true
+
+[[bin]]
+name = "sshe"
+path = "src/main.rs"

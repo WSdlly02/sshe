@@ -1,6 +1,6 @@
 use crate::ssher::config::{CacheConfig, FinalHostConfig, SelectionMode};
 use crate::ssher::selector::{ProbeResult, ProbeSource};
-use anyhow::{Context, Result, anyhow};
+use crate::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs;
@@ -83,35 +83,27 @@ pub fn store_cached_result(
 
 fn read_cache_file(path: &Path) -> Result<CacheFile> {
     match fs::read_to_string(path) {
-        Ok(content) => toml::from_str(&content)
-            .with_context(|| format!("failed to parse cache file {}", path.display())),
+        Ok(content) => toml::from_str(&content).map_err(|source| Error::Parse {
+            operation: format!("failed to parse cache file {}", path.display()),
+            source,
+        }),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(CacheFile::default()),
-        Err(err) => Err(anyhow!(
-            "failed to read cache file {}: {}",
-            path.display(),
-            err
+        Err(err) => Err(Error::io(
+            format!("failed to read cache file {}", path.display()),
+            err,
         )),
     }
 }
-
 fn write_cache_file(path: &Path, cache: &CacheFile) -> Result<()> {
     let parent = path
         .parent()
-        .ok_or_else(|| anyhow!("cache path has no parent: {}", path.display()))?;
-    fs::create_dir_all(parent)
-        .with_context(|| format!("failed to create cache directory {}", parent.display()))?;
-
-    let content = toml::to_string(cache)
-        .with_context(|| format!("failed to serialize cache file {}", path.display()))?;
-    fs::write(path, content)
-        .with_context(|| format!("failed to write cache file {}", path.display()))
+        .ok_or_else(|| Error::Invalid(format!("cache path has no parent: {}", path.display())))?;
+    fs::create_dir_all(parent).map_err(|e| Error::io("create cache directory", e))?;
+    let content = toml::to_string(cache)?;
+    fs::write(path, content).map_err(|e| Error::io(format!("write cache {}", path.display()), e))
 }
-
 fn current_unix_ts() -> Result<u64> {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
-        .map_err(|err| anyhow!("system clock error: {}", err))
+    Ok(SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs())
 }
 
 #[cfg(test)]

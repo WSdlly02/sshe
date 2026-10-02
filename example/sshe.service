@@ -1,0 +1,13 @@
+[Unit]
+Description=sshe peer diagnostics and control
+After=network.target
+
+[Service]
+ExecStart=%h/.cargo/bin/sshe daemon
+Restart=on-failure
+RestartSec=5
+KillMode=control-group
+UMask=0077
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,13 @@
+[package]
+name = "sshe-core"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+futures.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+nix.workspace = true
+sshe-protocol.workspace = true

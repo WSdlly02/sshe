@@ -54,3 +54,4 @@ target/
 dist/
 logs/
 *.log
+!**/*.service

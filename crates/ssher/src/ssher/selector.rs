@@ -1,5 +1,5 @@
 use crate::ssher::config::{FinalHostConfig, SelectionMode};
-use anyhow::{Context, Result, anyhow};
+use crate::{Error, Result};
 use futures::stream::{FuturesUnordered, StreamExt};
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
@@ -24,7 +24,7 @@ pub async fn select_best_endpoint(host: &FinalHostConfig, port: u16) -> Result<P
     let timeout = Duration::from_millis(host.probe_timeout_ms);
     let selection_mode = host.selection_mode;
     let mut tasks = FuturesUnordered::new();
-    let mut errors: Vec<anyhow::Error> = Vec::new();
+    let mut errors: Vec<Error> = Vec::new();
 
     for endpoint in host.endpoints.iter().cloned() {
         tasks.push(probe_endpoint(endpoint, port, timeout, selection_mode));
@@ -37,18 +37,7 @@ pub async fn select_best_endpoint(host: &FinalHostConfig, port: u16) -> Result<P
         }
     }
 
-    if errors.is_empty() {
-        Err(anyhow!("no reachable endpoint found"))
-    } else {
-        Err(anyhow!(
-            "{}",
-            errors
-                .into_iter()
-                .map(|err| err.to_string())
-                .collect::<Vec<String>>()
-                .join("; ")
-        ))
-    }
+    Err(Error::Unreachable(errors))
 }
 
 async fn probe_endpoint(
@@ -61,7 +50,11 @@ async fn probe_endpoint(
         SelectionMode::LowestTcpLatency => probe_tcp(&endpoint, port, timeout).await,
         SelectionMode::LowestIcmpLatency => probe_icmp(&endpoint, timeout).await,
     }
-    .map_err(|err| anyhow!("{endpoint}:{port} -> {err}"))?;
+    .map_err(|source| Error::Probe {
+        endpoint: endpoint.clone(),
+        port,
+        source: Box::new(source),
+    })?;
 
     Ok(ProbeResult {
         endpoint,
@@ -76,8 +69,8 @@ async fn probe_tcp(host: &str, port: u16, timeout: Duration) -> Result<u128> {
 
     time::timeout(timeout, TcpStream::connect(addr))
         .await
-        .map_err(|_| anyhow!("connect timeout"))?
-        .context("connect failed")?;
+        .map_err(|_| Error::Invalid("connect timeout".into()))?
+        .map_err(|e| Error::io("connect failed", e))?;
 
     Ok(start.elapsed().as_millis())
 }
@@ -86,11 +79,11 @@ async fn resolve_socket_addr(host: &str, port: u16) -> Result<SocketAddr> {
     let addr_text = format!("{host}:{port}");
     let mut addrs = lookup_host(&addr_text)
         .await
-        .with_context(|| format!("resolve failed for {addr_text}"))?;
+        .map_err(|e| Error::io(format!("resolve failed for {addr_text}"), e))?;
 
     addrs
         .next()
-        .ok_or_else(|| anyhow!("no socket address resolved"))
+        .ok_or_else(|| Error::Invalid("no socket address resolved".to_string()))
 }
 
 async fn probe_icmp(host: &str, timeout: Duration) -> Result<u128> {
@@ -99,19 +92,20 @@ async fn probe_icmp(host: &str, timeout: Duration) -> Result<u128> {
         .args(["-c", "1", "-W", &timeout_sec.to_string(), host])
         .output()
         .await
-        .with_context(|| format!("failed to execute ping for {host}"))?;
+        .map_err(|e| Error::io(format!("failed to execute ping for {host}"), e))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let message = stderr.trim();
         if message.is_empty() {
-            return Err(anyhow!("ping failed"));
+            return Err(Error::Invalid("ping failed".to_string()));
         }
-        return Err(anyhow!("ping failed: {message}"));
+        return Err(Error::Invalid(format!("ping failed: {message}")));
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    parse_ping_latency(&stdout).ok_or_else(|| anyhow!("unable to parse ping latency"))
+    parse_ping_latency(&stdout)
+        .ok_or_else(|| Error::Invalid("unable to parse ping latency".to_string()))
 }
 
 fn parse_ping_latency(stdout: &str) -> Option<u128> {

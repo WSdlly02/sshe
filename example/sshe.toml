@@ -1,0 +1,28 @@
+# Run sshe init first; identity is relative to this configuration file.
+identity = "config.key"
+
+# Replace with the actual EndpointId before uncommenting.
+# Presence in peers grants probe/history/exec access on this node.
+# [peers.desktop]
+# id = "<endpoint-id>"
+
+[probe]
+timeout_secs = 3 # per check, 1..=10; checks in a group run concurrently
+
+[probe.wan]
+domains = ["example.com"]
+tcp = ["1.1.1.1:443", "example.com:443"]
+
+[probe.lan]
+domains = []
+tcp = [] # e.g. ["192.168.1.10:22"]
+
+[probe.services]
+ssh = "tcp:127.0.0.1:22"
+# easytier = "systemd:easytier.service"
+
+[daemon]
+interval_secs = 30         # between scheduled rounds, 5..=3600
+history_size = 64          # records kept per (kind, method, target), 1..=1024
+probes = ["wan", "peers"]  # any of host, wan, lan, services, peers
+max_concurrent = 16        # concurrent requests, 1..=256

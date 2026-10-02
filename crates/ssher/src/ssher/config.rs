@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, anyhow, bail};
+use crate::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::env;
@@ -55,10 +55,12 @@ pub enum SelectionMode {
 }
 pub fn read_config_file(path: &Path) -> Result<SsherConfig> {
     let content = fs::read_to_string(path)
-        .with_context(|| format!("failed to read config file {}: ", path.display()))?;
+        .map_err(|e| Error::io(format!("failed to read config file {}", path.display()), e))?;
 
-    toml::from_str::<SsherConfig>(&content)
-        .with_context(|| format!("failed to parse TOML config {}: ", path.display()))
+    toml::from_str::<SsherConfig>(&content).map_err(|source| Error::Parse {
+        operation: format!("failed to parse TOML config {}", path.display()),
+        source,
+    })
 }
 
 impl SsherConfig {
@@ -66,7 +68,7 @@ impl SsherConfig {
         let host_config = self
             .hosts
             .get(host)
-            .with_context(|| format!("no configuration found for host '{}'", host))?;
+            .ok_or_else(|| Error::Invalid(format!("no configuration found for host '{}'", host)))?;
 
         let global = self.global.as_ref();
         let cache_ttl_sec = global.and_then(|cfg| cfg.cache_ttl_sec).unwrap_or(300);
@@ -83,34 +85,43 @@ impl SsherConfig {
     }
 
     pub fn validate(&self) -> Result<()> {
-        match &self.global {
-            Some(global) => {
-                if let Some(timeout) = global.probe_timeout_ms {
-                    if timeout == 0 {
-                        bail!("global probe_timeout_ms must be greater than 0");
-                    }
-                }
-                if let Some(ttl) = global.cache_ttl_sec {
-                    if ttl == 0 {
-                        bail!("global cache_ttl_sec must be greater than 0");
-                    }
-                }
+        if let Some(global) = &self.global {
+            if let Some(timeout) = global.probe_timeout_ms
+                && timeout == 0
+            {
+                return Err(Error::Invalid(
+                    "global probe_timeout_ms must be greater than 0".to_string(),
+                ));
             }
-            None => {}
+            if let Some(ttl) = global.cache_ttl_sec
+                && ttl == 0
+            {
+                return Err(Error::Invalid(
+                    "global cache_ttl_sec must be greater than 0".to_string(),
+                ));
+            }
         }
         match &self.hosts {
             hosts if hosts.is_empty() => {
-                bail!("at least one host configuration is required");
+                return Err(Error::Invalid(
+                    "at least one host configuration is required".to_string(),
+                ));
             }
             hosts => {
                 for (name, host) in hosts {
-                    if let Some(timeout) = host.probe_timeout_ms {
-                        if timeout == 0 {
-                            bail!("host '{}' probe_timeout_ms must be greater than 0", name);
-                        }
+                    if let Some(timeout) = host.probe_timeout_ms
+                        && timeout == 0
+                    {
+                        return Err(Error::Invalid(format!(
+                            "host '{}' probe_timeout_ms must be greater than 0",
+                            name
+                        )));
                     }
                     if host.endpoints.is_empty() {
-                        bail!("host '{}' must have at least one endpoint", name);
+                        return Err(Error::Invalid(format!(
+                            "host '{}' must have at least one endpoint",
+                            name
+                        )));
                     }
                 }
             }
@@ -147,11 +158,8 @@ fn default_cache_path() -> Result<PathBuf> {
     let output = Command::new("id")
         .arg("-u")
         .output()
-        .context("failed to execute 'id -u' to get current user ID")?;
-    let uid = String::from_utf8(output.stdout)
-        .map_err(|_| anyhow!("failed to parse user ID"))?
-        .trim()
-        .to_string();
+        .map_err(|e| Error::io("failed to execute id -u", e))?;
+    let uid = String::from_utf8(output.stdout)?.trim().to_string();
 
     Ok(PathBuf::from(format!(
         "/run/user/{uid}/sshe/ssher_cache.toml"
@@ -160,12 +168,12 @@ fn default_cache_path() -> Result<PathBuf> {
 
 fn expand_tilde(path: &str) -> Result<String> {
     if path == "~" {
-        let home = env::var("HOME").context("HOME is not set")?;
+        let home = env::var("HOME")?;
         return Ok(home);
     }
 
     if let Some(stripped) = path.strip_prefix("~/") {
-        let home = env::var("HOME").context("HOME is not set")?;
+        let home = env::var("HOME")?;
         return Ok(format!("{home}/{stripped}"));
     }
 

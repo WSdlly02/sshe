@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, anyhow, bail};
 use clap::Parser;
-use sshe::ssher;
+use ssher::ssher;
 use std::process::ExitCode;
 use tokio::io::{self, AsyncWriteExt};
 use tokio::net::TcpStream;
