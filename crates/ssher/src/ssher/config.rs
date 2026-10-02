@@ -53,6 +53,7 @@ pub enum SelectionMode {
     LowestIcmpLatency,
     LowestTcpLatency,
 }
+
 pub fn read_config_file(path: &Path) -> Result<SsherConfig> {
     let content = fs::read_to_string(path)
         .map_err(|e| Error::io(format!("failed to read config file {}", path.display()), e))?;

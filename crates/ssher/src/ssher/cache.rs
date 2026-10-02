@@ -94,6 +94,7 @@ fn read_cache_file(path: &Path) -> Result<CacheFile> {
         )),
     }
 }
+
 fn write_cache_file(path: &Path, cache: &CacheFile) -> Result<()> {
     let parent = path
         .parent()
@@ -102,6 +103,7 @@ fn write_cache_file(path: &Path, cache: &CacheFile) -> Result<()> {
     let content = toml::to_string(cache)?;
     fs::write(path, content).map_err(|e| Error::io(format!("write cache {}", path.display()), e))
 }
+
 fn current_unix_ts() -> Result<u64> {
     Ok(SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs())
 }
