@@ -14,6 +14,14 @@ Linux 上的对等节点诊断和非交互式应急控制工具。Iroh 提供加
 | sshe-cli | `sshe` 命令解析与输出 |
 | ssher | 保留的地址选择和 TCP stdio 桥接 |
 
+各 crate 按职责拆分模块，`lib.rs` 负责模块声明和公开接口，`main.rs` 负责启动和退出处理：
+
+- `sshe-cli`：`args` 定义命令（本地命令与可远程命令分为两个枚举），`app` 分派操作，`output` 格式化结果。
+- `sshe-core`：`config`、`exec`、`error`、`time`；`probe/` 下分别实现 host、network、services 和公共测量逻辑。
+- `sshe-node`：模块单向依赖，自底向上为 `transport`（Endpoint、RPC、超时）→ `probe` → `dispatch`（在 `Node` 上执行单个请求）→ `server`（服务 peer 与本地请求）/ `client`（CLI 侧路由）→ `daemon`（生命周期与准入）。另有 `config`、`identity`（密钥与锁）、`layout`（由配置路径派生的文件）、`history`、`scheduler`、`ipc`、`error`；跨模块测试集中在 `tests.rs`。对外只公开 `config`、`invoke`、`daemon`、`endpoint_id` 与错误类型。
+- `sshe-protocol`：`message` 定义消息，`codec` 处理封包，`limits` 集中协议常量，`error` 定义错误。
+- `ssher`：保留现有入口与错误类型，以及 `ssher/` 下的参数、配置、缓存和探测模块。
+
 内部库使用 `thiserror`，二进制入口用 `anyhow` 添加上下文。
 
 ```bash

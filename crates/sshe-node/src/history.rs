@@ -6,6 +6,7 @@ pub struct History {
     capacity: usize,
     series: BTreeMap<(ProbeKind, String, String), Series>,
 }
+
 #[derive(Default)]
 struct Series {
     records: VecDeque<Record>,
