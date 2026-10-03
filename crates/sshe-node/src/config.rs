@@ -1,12 +1,13 @@
 use crate::{Error, Result, identity, layout::Layout};
-use iroh::EndpointId;
+use iroh::{EndpointAddr, EndpointId, TransportAddr};
 use serde::{Deserialize, Serialize};
-use sshe_core::{MAX_PROBE_TIMEOUT_SECS, ProbeConfig};
+use sshe_core::{MAX_PEER_TIMEOUT_SECS, MAX_PROBE_TIMEOUT_SECS, ProbeConfig};
 use sshe_protocol::ProbeKind;
 use std::{
     collections::BTreeMap,
     fs::{self, File},
     io::Write,
+    net::SocketAddr,
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
 };
@@ -26,23 +27,27 @@ pub struct Config {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct DaemonConfig {
-    /// Seconds between scheduled probe rounds; a slow round delays the next one.
+    /// Seconds from completion to the next probe of that kind, including manual rounds.
     pub interval_secs: u64,
     /// Records kept per (kind, method, target); older ones are dropped.
     pub history_size: usize,
-    /// Probe kinds the daemon runs each round and records into history.
+    /// Probe kinds to schedule automatically; manual probes of other kinds are still recorded.
     pub probes: Vec<ProbeKind>,
-    /// Concurrent Iroh and Unix socket requests; excess ones are refused.
+    /// Concurrent requests per source (peers, local CLI); excess ones get a busy reply.
     pub max_concurrent: usize,
+    /// Fixed UDP port for IPv4 and IPv6, so a firewall can allow it; random when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bind_port: Option<u16>,
 }
 
 impl Default for DaemonConfig {
     fn default() -> Self {
         Self {
-            interval_secs: 30,
+            interval_secs: 60,
             history_size: 64,
             probes: vec![ProbeKind::Wan, ProbeKind::Peers],
             max_concurrent: 16,
+            bind_port: None,
         }
     }
 }
@@ -51,6 +56,16 @@ impl Default for DaemonConfig {
 #[serde(deny_unknown_fields)]
 pub struct Peer {
     pub id: EndpointId,
+    /// Known direct addresses, tried alongside address lookup so dialing does
+    /// not depend on it alone (e.g. a VPS's public IP and `bind_port`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub addrs: Vec<SocketAddr>,
+}
+
+impl Peer {
+    pub fn addr(&self) -> EndpointAddr {
+        EndpointAddr::from_parts(self.id, self.addrs.iter().copied().map(TransportAddr::Ip))
+    }
 }
 
 pub fn default_path() -> Result<PathBuf> {
@@ -86,7 +101,12 @@ impl Config {
         {
             return Err(Error::Invalid("at most 16 checks per probe group".into()));
         }
-        let checks: [(&str, u64, std::ops::RangeInclusive<u64>); 4] = [
+        let checks: [(&str, u64, std::ops::RangeInclusive<u64>); 5] = [
+            (
+                "probe.peer_timeout_secs",
+                self.probe.peer_timeout_secs,
+                1..=MAX_PEER_TIMEOUT_SECS,
+            ),
             (
                 "probe.timeout_secs",
                 self.probe.timeout_secs,

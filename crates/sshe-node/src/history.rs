@@ -14,6 +14,18 @@ struct Series {
     last_success_at: Option<u64>,
 }
 
+/// How a new record changes its series; sampling logs only these.
+#[derive(Debug, PartialEq)]
+pub(crate) enum Transition {
+    First,
+    Failed,
+    /// The previous success, if any: the outage lasted at most since then.
+    Recovered {
+        last_success_at: Option<u64>,
+    },
+    Unchanged,
+}
+
 impl History {
     pub fn new(capacity: usize) -> Self {
         Self {
@@ -21,9 +33,17 @@ impl History {
             series: BTreeMap::new(),
         }
     }
-    pub fn insert(&mut self, mut record: Record) {
+    pub(crate) fn insert(&mut self, record: &mut Record) -> Transition {
         let key = (record.kind, record.method.clone(), record.target.clone());
         let series = self.series.entry(key).or_default();
+        let transition = match (series.records.back().map(|r| r.success), record.success) {
+            (None, _) => Transition::First,
+            (Some(true), false) => Transition::Failed,
+            (Some(false), true) => Transition::Recovered {
+                last_success_at: series.last_success_at,
+            },
+            _ => Transition::Unchanged,
+        };
         if record.success {
             series.last_success_at = Some(record.observed_at);
         }
@@ -31,7 +51,8 @@ impl History {
         if series.records.len() == self.capacity {
             series.records.pop_front();
         }
-        series.records.push_back(record);
+        series.records.push_back(record.clone());
+        transition
     }
     /// Most recent `limit` matching records, oldest first.
     pub fn query(&self, kind: Option<ProbeKind>, about: Option<&str>, limit: usize) -> Vec<Record> {
@@ -62,6 +83,7 @@ mod tests {
             duration_ms: 1,
             success,
             error: (!success).then(|| "down".into()),
+            error_kind: None,
             last_success_at: success.then_some(at),
             data: None,
         }
@@ -69,10 +91,10 @@ mod tests {
     #[test]
     fn bounded_per_series_and_keeps_last_success_after_eviction() {
         let mut history = History::new(2);
-        history.insert(record("a", 1, true));
-        history.insert(record("a", 2, false));
-        history.insert(record("a", 3, false));
-        history.insert(record("b", 4, true));
+        history.insert(&mut record("a", 1, true));
+        history.insert(&mut record("a", 2, false));
+        history.insert(&mut record("a", 3, false));
+        history.insert(&mut record("b", 4, true));
         let a = history.query(None, Some("a"), 10);
         assert_eq!(a.iter().map(|r| r.observed_at).collect::<Vec<_>>(), [2, 3]);
         assert!(a.iter().all(|r| r.last_success_at == Some(1)));
@@ -82,6 +104,33 @@ mod tests {
         assert_eq!(
             latest.iter().map(|r| r.observed_at).collect::<Vec<_>>(),
             [3, 4]
+        );
+    }
+    #[test]
+    fn transitions_mark_failures_and_recoveries_once() {
+        let mut history = History::new(8);
+        assert_eq!(history.insert(&mut record("a", 1, true)), Transition::First);
+        assert_eq!(
+            history.insert(&mut record("a", 2, false)),
+            Transition::Failed
+        );
+        assert_eq!(
+            history.insert(&mut record("a", 3, false)),
+            Transition::Unchanged
+        );
+        assert_eq!(
+            history.insert(&mut record("b", 4, false)),
+            Transition::First
+        );
+        assert_eq!(
+            history.insert(&mut record("a", 5, true)),
+            Transition::Recovered {
+                last_success_at: Some(1)
+            }
+        );
+        assert_eq!(
+            history.insert(&mut record("a", 6, true)),
+            Transition::Unchanged
         );
     }
 }

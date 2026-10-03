@@ -5,9 +5,11 @@ identity = "config.key"
 # Presence in peers grants probe/history/exec access on this node.
 # [peers.desktop]
 # id = "<endpoint-id>"
+# addrs = ["203.0.113.7:7777"]   # optional known direct addresses, e.g. a VPS public IP
 
 [probe]
-timeout_secs = 3 # per check, 1..=10; checks in a group run concurrently
+timeout_secs = 5        # DNS/TCP/service check, 1..=10; checks in a group run concurrently
+peer_timeout_secs = 15  # peer health check incl. cold dial, 1..=45; short so outages show
 
 [probe.wan]
 domains = ["example.com"]
@@ -22,7 +24,8 @@ ssh = "tcp:127.0.0.1:22"
 # easytier = "systemd:easytier.service"
 
 [daemon]
-interval_secs = 30         # between scheduled rounds, 5..=3600
+interval_secs = 60         # between scheduled rounds, 5..=3600
 history_size = 64          # records kept per (kind, method, target), 1..=1024
 probes = ["wan", "peers"]  # any of host, wan, lan, services, peers
-max_concurrent = 16        # concurrent requests, 1..=256
+max_concurrent = 16        # concurrent requests per source (peers, local CLI), 1..=256
+# bind_port = 7777         # fixed UDP port (IPv4 and IPv6) for firewalls; random when unset

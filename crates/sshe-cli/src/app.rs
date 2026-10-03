@@ -66,7 +66,13 @@ fn peer(action: PeerAction, path: &Path) -> Result<()> {
                 bail!("alias already exists; remove it explicitly before replacing");
             }
             let id = endpoint_id.parse().context("invalid EndpointId")?;
-            cfg.peers.insert(alias, config::Peer { id });
+            cfg.peers.insert(
+                alias,
+                config::Peer {
+                    id,
+                    addrs: Vec::new(),
+                },
+            );
         }
         PeerAction::Remove { alias } => {
             if cfg.peers.remove(&alias).is_none() {

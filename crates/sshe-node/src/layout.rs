@@ -17,6 +17,10 @@ impl Layout {
             socket: config.with_extension("sock"),
         }
     }
+    /// `sun_path` holds 108 bytes including the terminating NUL.
+    pub(crate) fn socket_fits(&self) -> bool {
+        self.socket.as_os_str().len() < 108
+    }
     pub(crate) fn dir(&self) -> &Path {
         self.config.parent().unwrap_or(Path::new("."))
     }

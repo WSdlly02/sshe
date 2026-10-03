@@ -6,15 +6,17 @@ use crate::{
     identity,
     ipc::LocalRequest,
     layout::Layout,
-    transport::{LOCAL_TIMEOUT, call, endpoint, unknown_if_exec, within},
+    transport::{Dialer, LOCAL_TIMEOUT, endpoint, unknown_if_exec, within},
 };
 use sshe_protocol::{ProbeKind, Request, Response, read_frame, write_frame};
 use std::{io::ErrorKind, path::Path};
 use tokio::net::UnixStream;
 
 enum Route {
-    /// Local probes and exec need neither the daemon nor an Endpoint.
+    /// Local exec needs neither the daemon nor an Endpoint.
     InProcess,
+    /// Prefers the daemon, falling back to local probes without an Endpoint.
+    DaemonOrInProcess,
     /// Prefers the daemon's Endpoint; without a daemon, binds a temporary one.
     DaemonOrEndpoint,
     /// Local history lives only in the daemon.
@@ -31,6 +33,7 @@ fn route(target: Option<&str>, request: &Request) -> Route {
                 kind: ProbeKind::Peers,
             },
         ) => Route::DaemonOrEndpoint,
+        (None, Request::Probe { .. }) => Route::DaemonOrInProcess,
         (None, _) => Route::InProcess,
     }
 }
@@ -48,7 +51,8 @@ pub async fn invoke(path: &Path, target: Option<String>, request: Request) -> Re
     }
     match route {
         Route::DaemonOnly => Err(Error::Invalid("history requires a running daemon".into())),
-        _ => with_endpoint(&config, target.as_deref(), request).await,
+        Route::DaemonOrInProcess | Route::InProcess => in_process(&config, request).await,
+        Route::DaemonOrEndpoint => with_endpoint(&config, target.as_deref(), request).await,
     }
 }
 
@@ -56,18 +60,21 @@ async fn in_process(config: &Config, request: Request) -> Result<Response> {
     let node = Node {
         config,
         id: crate::endpoint_id(config)?.to_string(),
-        endpoint: None,
-        history: None,
+        dialer: None,
+        sampler: None,
     };
     dispatch(&node, request).await
 }
 
-/// None when no daemon is listening.
+/// None when no daemon is listening, or none could (socket path too long to bind).
 async fn via_daemon(
     layout: &Layout,
     target: Option<String>,
     request: &Request,
 ) -> Result<Option<Response>> {
+    if !layout.socket_fits() {
+        return Ok(None);
+    }
     let mut stream = match UnixStream::connect(&layout.socket).await {
         Ok(stream) => stream,
         Err(e) if matches!(e.kind(), ErrorKind::NotFound | ErrorKind::ConnectionRefused) => {
@@ -95,15 +102,17 @@ async fn with_endpoint(
 ) -> Result<Response> {
     let peer = target.map(|alias| config.peer(alias)).transpose()?;
     let _lock = identity::lock(&config.identity)?;
-    let ep = endpoint(identity::load_key(&config.identity)?).await?;
+    // A temporary endpoint never needs a fixed port; that is the daemon's.
+    let ep = endpoint(identity::load_key(&config.identity)?, None).await?;
+    let dialer = Dialer::new(ep.clone(), config.peers.values().map(|p| p.id));
     let result = match peer {
-        Some(peer) => call(&ep, peer.id, &request).await,
+        Some(peer) => dialer.call(peer.addr(), &request).await,
         None => {
             let node = Node {
                 config,
                 id: ep.id().to_string(),
-                endpoint: Some(&ep),
-                history: None,
+                dialer: Some(&dialer),
+                sampler: None,
             };
             dispatch(&node, request).await
         }

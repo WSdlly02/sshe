@@ -1,6 +1,6 @@
-//! Node lifecycle, peer RPC and scheduled probe history.
+//! Node lifecycle, peer RPC and shared probe history.
 //!
-//! Layers, lowest first: `transport` (Endpoint, RPC, timeouts) → `probe` →
+//! Layers, lowest first: `transport` (Endpoint, RPC, timeouts) → `probe` → `sampling` →
 //! `dispatch` (one request against a `Node`) → `server` / `client` → `daemon`.
 mod client;
 pub mod config;
@@ -12,6 +12,7 @@ mod identity;
 mod ipc;
 mod layout;
 mod probe;
+mod sampling;
 mod scheduler;
 mod server;
 mod transport;

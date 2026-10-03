@@ -11,6 +11,7 @@ serde_json.workspace = true
 sshe-node.workspace = true
 sshe-core.workspace = true
 sshe-protocol.workspace = true
+tracing-subscriber.workspace = true
 
 [[bin]]
 name = "sshe"

@@ -18,6 +18,8 @@ toml = "1.1.6"
 iroh = "1.3.0"
 nix = { version = "0.30", features = ["signal", "process", "fs"] }
 thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tempfile = "3"
 sshe-protocol = { path = "crates/sshe-protocol" }
 sshe-core = { path = "crates/sshe-core" }

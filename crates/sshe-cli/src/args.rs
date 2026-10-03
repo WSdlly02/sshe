@@ -48,12 +48,12 @@ pub(crate) enum LocalAction {
 /// Commands that run on `@target`, or on this node by default.
 #[derive(Subcommand)]
 pub(crate) enum RemoteAction {
-    /// Run one probe now.
+    /// Probe now (or share an ongoing round); the daemon records the result.
     Probe {
         #[arg(value_enum)]
         kind: Kind,
     },
-    /// Show results recorded by the daemon's scheduled probes; never probes.
+    /// Show manual and scheduled probe results recorded by the daemon; never probes.
     History {
         #[arg(long, value_enum)]
         kind: Option<Kind>,

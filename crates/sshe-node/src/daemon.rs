@@ -1,16 +1,21 @@
 //! Daemon lifecycle: socket setup, admission, task supervision and shutdown.
+//!
+//! Admission has three separate limits, so neither strangers nor a busy peer can
+//! lock the local CLI out:
+//! - connection slots, held from an incoming handshake until the connection ends;
+//! - peer request permits and local request permits, held while a request runs.
 use crate::{
     Error, Result, config,
     config::Config,
     dispatch::Node,
     error::transport,
-    history::History,
     identity,
     layout::Layout,
+    sampling::Sampler,
     scheduler, server,
-    transport::{CONNECT_TIMEOUT, endpoint, within},
+    transport::{Dialer, HANDSHAKE_TIMEOUT, endpoint, within},
 };
-use iroh::{Endpoint, endpoint::Incoming};
+use iroh::endpoint::Incoming;
 use std::{
     os::unix::fs::{FileTypeExt, PermissionsExt},
     path::{Path, PathBuf},
@@ -19,24 +24,29 @@ use std::{
 use tokio::{
     net::{UnixListener, UnixStream},
     signal::unix::{SignalKind, signal},
-    sync::{OwnedSemaphorePermit, RwLock, Semaphore},
+    sync::{OwnedSemaphorePermit, Semaphore},
     task::JoinSet,
 };
+
+/// Concurrent incoming connections, handshakes included.
+const MAX_CONNECTIONS: usize = 64;
 
 /// Owned state shared by request tasks and the scheduler.
 struct Daemon {
     config: Config,
-    ep: Endpoint,
-    history: RwLock<History>,
+    dialer: Dialer,
+    sampler: Sampler,
+    peer_permits: Semaphore,
+    local_permits: Semaphore,
 }
 
 impl Daemon {
     fn node(&self) -> Node<'_> {
         Node {
             config: &self.config,
-            id: self.ep.id().to_string(),
-            endpoint: Some(&self.ep),
-            history: Some(&self.history),
+            id: self.dialer.endpoint().id().to_string(),
+            dialer: Some(&self.dialer),
+            sampler: Some(&self.sampler),
         }
     }
 }
@@ -51,18 +61,30 @@ impl Drop for SocketGuard {
 pub async fn daemon(path: &Path) -> Result<()> {
     let config = config::read(path)?;
     let _lock = identity::lock(&config.identity)?;
-    let (listener, _socket_guard) = bind_socket(&Layout::new(path).socket).await?;
-    let ep = endpoint(identity::load_key(&config.identity)?).await?;
-    let permits = Arc::new(Semaphore::new(config.daemon.max_concurrent));
+    let (listener, _socket_guard) = bind_socket(&Layout::new(path)).await?;
+    let ep = endpoint(
+        identity::load_key(&config.identity)?,
+        config.daemon.bind_port,
+    )
+    .await?;
+    let max = config.daemon.max_concurrent;
     let state = Arc::new(Daemon {
-        history: RwLock::new(History::new(config.daemon.history_size)),
+        sampler: Sampler::new(&config.daemon),
+        peer_permits: Semaphore::new(max),
+        local_permits: Semaphore::new(max),
+        dialer: Dialer::new(ep.clone(), config.peers.values().map(|p| p.id)),
         config,
-        ep: ep.clone(),
     });
+    let connection_slots = Arc::new(Semaphore::new(MAX_CONNECTIONS));
+    // Local connections beyond this are dropped unread instead of queueing.
+    let local_slots = Arc::new(Semaphore::new(2 * max));
     let mut tasks = JoinSet::new();
     let scheduled = state.clone();
-    tasks.spawn(async move { scheduler::run(&scheduled.node(), &scheduled.history).await });
-    eprintln!("sshe daemon {} (config changes require restart)", ep.id());
+    tasks.spawn(async move {
+        scheduler::run(&scheduled.config, &scheduled.dialer, &scheduled.sampler).await
+    });
+    tracing::info!(id = %ep.id(), bind_port = ?state.config.daemon.bind_port,
+        "daemon started; config changes require restart");
     let mut terminate = signal(SignalKind::terminate())?;
     let result = loop {
         tokio::select! {
@@ -70,14 +92,17 @@ pub async fn daemon(path: &Path) -> Result<()> {
             _ = terminate.recv() => break Ok(()),
             Some(joined) = tasks.join_next() => {
                 if let Err(error) = joined {
-                    eprintln!("task failed: {error}");
+                    tracing::error!(%error, "daemon task failed");
                 }
             }
             incoming = ep.accept() => {
                 let Some(incoming) = incoming else { break Ok(()) };
-                match permits.clone().try_acquire_owned() {
-                    Ok(permit) => { tasks.spawn(handle_peer(state.clone(), incoming, permit)); }
-                    Err(_) => incoming.refuse(),
+                match connection_slots.clone().try_acquire_owned() {
+                    Ok(slot) => { tasks.spawn(handle_peer(state.clone(), incoming, slot)); }
+                    Err(_) => {
+                        tracing::warn!("connection limit reached; refusing incoming handshake");
+                        incoming.refuse();
+                    }
                 }
             }
             accepted = listener.accept() => {
@@ -85,11 +110,14 @@ pub async fn daemon(path: &Path) -> Result<()> {
                     Ok(pair) => pair,
                     Err(e) => break Err(e.into()),
                 };
-                let permit = permits.clone().try_acquire_owned().ok();
-                tasks.spawn(handle_local(state.clone(), stream, permit));
+                match local_slots.clone().try_acquire_owned() {
+                    Ok(slot) => { tasks.spawn(handle_local(state.clone(), stream, slot)); }
+                    Err(_) => tracing::warn!("too many local connections; dropping one unread"),
+                }
             }
         }
     };
+    tracing::info!("daemon stopping");
     tasks.abort_all();
     while tasks.join_next().await.is_some() {}
     ep.close().await;
@@ -97,7 +125,14 @@ pub async fn daemon(path: &Path) -> Result<()> {
 }
 
 /// Binds a private socket, replacing only a stale socket no daemon is listening on.
-async fn bind_socket(socket: &Path) -> Result<(UnixListener, SocketGuard)> {
+async fn bind_socket(layout: &Layout) -> Result<(UnixListener, SocketGuard)> {
+    let socket = layout.socket.as_path();
+    if !layout.socket_fits() {
+        return Err(Error::Invalid(format!(
+            "socket path {} is longer than 107 bytes; use a shorter config path",
+            socket.display()
+        )));
+    }
     let parent = socket
         .parent()
         .ok_or_else(|| Error::Invalid("socket parent missing".into()))?;
@@ -129,24 +164,25 @@ async fn bind_socket(socket: &Path) -> Result<(UnixListener, SocketGuard)> {
     Ok((listener, guard))
 }
 
-async fn handle_peer(state: Arc<Daemon>, incoming: Incoming, _permit: OwnedSemaphorePermit) {
-    let result = async {
-        let conn = within(CONNECT_TIMEOUT, async { incoming.await.map_err(transport) }).await?;
-        server::serve_peer(conn, &state.node()).await
-    }
-    .await;
-    if let Err(error) = result {
-        eprintln!("RPC failed: {error}");
-    }
+/// Failed handshakes are routine (stale or duplicated packets via a relay), so they
+/// are logged at debug only.
+async fn handle_peer(state: Arc<Daemon>, incoming: Incoming, _slot: OwnedSemaphorePermit) {
+    let conn = match within(HANDSHAKE_TIMEOUT, async {
+        incoming.await.map_err(transport)
+    })
+    .await
+    {
+        Ok(conn) => conn,
+        Err(error) => {
+            tracing::debug!(%error, "incoming handshake did not complete");
+            return;
+        }
+    };
+    server::serve_peer(conn, &state.node(), &state.peer_permits).await;
 }
 
-/// `permit` is None when saturated; the request is then refused with a reply.
-async fn handle_local(
-    state: Arc<Daemon>,
-    stream: UnixStream,
-    permit: Option<OwnedSemaphorePermit>,
-) {
-    if let Err(error) = server::serve_local(stream, &state.node(), permit.is_some()).await {
-        eprintln!("local RPC failed: {error}");
+async fn handle_local(state: Arc<Daemon>, stream: UnixStream, _slot: OwnedSemaphorePermit) {
+    if let Err(error) = server::serve_local(stream, &state.node(), &state.local_permits).await {
+        tracing::warn!(%error, "local request failed");
     }
 }

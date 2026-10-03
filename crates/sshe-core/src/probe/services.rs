@@ -23,7 +23,7 @@ pub async fn services(services: &BTreeMap<String, String>, limit: Duration) -> V
                     )
                     .await?;
                     if output.exit_code != Some(0) {
-                        return Err(Error::Invalid(format!(
+                        return Err(Error::Inactive(format!(
                             "unit inactive: {}",
                             String::from_utf8_lossy(&output.stdout).trim()
                         )));

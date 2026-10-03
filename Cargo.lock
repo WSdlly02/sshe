@@ -2857,6 +2857,7 @@ dependencies = [
  "sshe-node",
  "sshe-protocol",
  "tokio",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -2886,6 +2887,7 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "toml",
+ "tracing",
 ]
 
 [[package]]
